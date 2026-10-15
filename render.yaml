@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: yablok-ia-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: AI_FUNPAY_BASE_URL
+        sync: false
+      - key: AI_FUNPAY_KEY
+        sync: false
+      - key: AI_MODEL
+        value: gpt-6-astra
+      - key: POLLINATIONS_API_KEY
+        sync: false
+      - key: POLLI_MODEL
+        value: openai
+      - key: AI_MAX_TOKENS
+        value: 350
