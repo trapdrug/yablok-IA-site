@@ -1,27 +1,45 @@
-# Деплой — ПОДГОТОВЛЕНО, НЕ ЗАПУЩЕНО
+# Деплой
 
-Проект готов к деплою через ветку `main`, но сам деплой не выполнялся.
+## Как ИИ работает «везде»
+- **Основной путь — прямо из браузера.** `frontend/src/llm.ts` вызывает провайдера
+  DungeonAPI (`https://31-76-100-137.sslip.io/v1`, модель `gpt-6-astra`) напрямую.
+  Это работает на статичном хостинге без сервера, поэтому ИИ отвечает реальной моделью
+  у любого посетителя (метка «● ответ нейросети»).
+- **Если backend поднят** — сайт сначала спрашивает его (`/api/ai/ask`). Там тот же ключ
+  используется через переменную `DUNGEON_API_KEY` (`backend/ai.py`).
+- Если ни ключа, ни backend нет — офлайн-режим: точные ответы по правилам (`via: 'rules'`)
+  и плашка «демо».
 
-## Что уже настроено
+## ⚠️ Ключ в публичной сборке
+- Ключ вшит в `frontend/src/llm.ts` (`DEFAULT_KEY`) и потому **виден любому**, кто откроет
+  исходники страницы. Это осознанный выбор: так ИИ работает у всех без своего сервера.
+  Ключ стоит периодически менять у провайдера.
+- Чтобы убрать ключ из репозитория: добавьте Secrets репозитория
+  (Settings → Secrets and variables → Actions → **Secrets**) `VITE_DUNGEON_KEY`,
+  `VITE_DUNGEON_BASE_URL`, `VITE_DUNGEON_MODEL` и удалите значение из `llm.ts`.
 
-- `main` — ветка для деплоя.
-- `.github/workflows/pages.yml` — деплой frontend на GitHub Pages при push в `main`.
-- `.github/workflows/ci.yml` — проверка на `main`: backend-тесты + сборка frontend (без деплоя).
+## Что настроено
+- `main` — ветка деплоя.
+- `.github/workflows/pages.yml` — сборка и деплой frontend на GitHub Pages при push в `main`.
+- `.github/workflows/ci.yml` — backend-тесты + сборка frontend.
 - `render.yaml` + `Dockerfile` — заготовка для backend (Render / любой Docker-хостинг).
-- Секреты НЕ в гите: `backend/.env` в `.gitignore`, в репо только `*.env.example`.
+- Секреты НЕ в гите: `backend/.env` и `frontend/.env` в `.gitignore`, в репо только `*.env.example`.
 
-## Как включить деплой (вручную, когда будет нужно)
+## Frontend (GitHub Pages)
+- Адрес: https://trapdrug.github.io/yablok-IA-site/
+- `frontend/src/api.ts` умеет работать без backend (mock-fallback) — Pages-версия
+  открывается даже без API, а ИИ отвечает нейросетью напрямую.
 
-### Frontend (GitHub Pages)
-1. GitHub → Settings → Pages → Source: **GitHub Actions**.
-2. `git push origin main` — запустит `pages.yml`.
-3. Важно: `frontend/src/api.ts` уже умеет работать без backend (mock-fallback),
-   поэтому Pages-версия откроется даже без API.
-
-### Backend (Render)
+## Backend (опционально: Render / свой сервер)
 1. Render → New → Blueprint → указать репозиторий (подхватит `render.yaml`).
-2. В Environment добавить секреты из `backend/.env.example`:
-   `AI_FUNPAY_KEY`, `POLLINATIONS_API_KEY` и т.д.
+2. В Environment добавить `DUNGEON_API_KEY` (купленный ключ). При желании —
+   `POLLINATIONS_API_KEY`, `AI_FUNPAY_KEY`.
 3. После деплоя прописать URL backend в `VITE_API_URL` и пересобрать frontend.
 
-Деплой сейчас НЕ запущен — это только подготовка.
+## Локальный запуск
+```
+cd backend
+python -m uvicorn backend.app:app --port 8000 --host 0.0.0.0    # из корня репо
+cd frontend
+npm install && npm run dev                                       # http://localhost:5173
+```

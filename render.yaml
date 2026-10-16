@@ -8,6 +8,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
+      - key: DUNGEON_BASE_URL
+        value: https://31-76-100-137.sslip.io/v1
+      - key: DUNGEON_API_KEY
+        sync: false
+      - key: DUNGEON_MODEL
+        value: gpt-6-astra
       - key: AI_FUNPAY_BASE_URL
         sync: false
       - key: AI_FUNPAY_KEY

@@ -10,14 +10,15 @@ SYSTEM_PROMPT = (
     "Ты — аналитик склада «ЯблокИИ». Отвечай ТОЛЬКО по разделу Данные. "
     "Не выдумывай ID, числа, даты. Нет записи — скажи «такой записи нет». "
     "Называй товар, всего/свободно/бронь и вывод. Отвечай по-русски, коротко, "
-    "полными предложениями: ответ одним числом запрещён."
+    "полными предложениями: ответ одним числом запрещён. "
+    "Пиши обычным текстом, без markdown: никаких **, #, таблиц и звёздочек."
 )
 
 CONSULT_PROMPT = (
     "Ты — дружелюбный консультант склада «ЯблокИИ». Объясняй простыми словами: "
     "что в наличии, что делать. Опирайся ТОЛЬКО на раздел Данные, не выдумывай числа. "
     "Нет записи — скажи «такой записи нет». Отвечай по-русски, коротко, тепло, "
-    "полными предложениями."
+    "полными предложениями. Пиши обычным текстом, без markdown: никаких **, # и звёздочек."
 )
 
 KEY_URL = os.getenv("POLLI_BASE_URL", "https://text.pollinations.ai/openai")
@@ -31,6 +32,13 @@ BASE_URL = os.getenv("AI_FUNPAY_BASE_URL", "https://www.ai-funpay.ru/v1")
 API_KEY = os.getenv("AI_FUNPAY_KEY", "")
 MODEL_MAIN = os.getenv("AI_MODEL", "gpt-6-astra")
 MODEL_FALLBACK = "deepseek-v4-pro"
+
+# Купленный ключ (DungeonAPI, OpenAI-compatible) — ОСНОВНОЙ провайдер
+# для ИИ-аналитика и ИИ-консультанта. Ключ живёт только в backend/.env
+# локально и в переменных окружения на хостинге — в git не попадает.
+DUNGEON_BASE_URL = os.getenv("DUNGEON_BASE_URL", "https://31-76-100-137.sslip.io/v1")
+DUNGEON_API_KEY = os.getenv("DUNGEON_API_KEY", "")
+DUNGEON_MODEL = os.getenv("DUNGEON_MODEL", "gpt-6-astra")
 
 
 def _human_sku(sku: str) -> str:
@@ -85,6 +93,41 @@ def build_facts(snapshot: dict, readiness_extra: dict | None = None, scenario_di
     ships = all_shipments if all_shipments is not None else snapshot.get("shipments_expected", [])
     return {"snapshot_summary": snapshot_summary, "readiness_table": readiness_table,
             "shipments": ships, "scenario_diff": scenario_diff}
+
+
+def _call_dungeon_llm(question: str, compact: dict, persona: str = "analyst", history: list | None = None) -> str | None:
+    """Купленный ключ DungeonAPI (OpenAI-compatible). Основной провайдер."""
+    if not DUNGEON_API_KEY:
+        return None
+    system = CONSULT_PROMPT if persona == "consultant" else SYSTEM_PROMPT
+    messages = [{"role": "system", "content": system}]
+    for h in (history or [])[-6:]:
+        if isinstance(h, dict) and h.get("role") in ("user", "assistant") and h.get("content"):
+            messages.append({"role": h["role"], "content": str(h["content"])[:300]})
+    messages.append({"role": "user", "content":
+        "Данные:\n" + json.dumps(compact, ensure_ascii=False) + f"\n\nВопрос: {question}"})
+    body = json.dumps({
+        "model": DUNGEON_MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": AI_MAX_TOKENS,
+    }).encode("utf-8")
+    req = urllib.request.Request(DUNGEON_BASE_URL.rstrip("/") + "/chat/completions", data=body, headers={
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {DUNGEON_API_KEY}",
+    }, method="POST")
+    import time as _t
+    for _attempt in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                text = (data["choices"][0]["message"]["content"] or "").strip()
+                if text:
+                    return text
+        except Exception:
+            pass
+        _t.sleep(1)
+    return None
 
 
 def _call_key_llm(question: str, compact: dict, persona: str = "analyst", history: list | None = None) -> str | None:
@@ -246,6 +289,13 @@ def answer(question: str, snapshot: dict, scenario_diff: dict | None = None, all
     if persona not in ("analyst", "consultant"):
         persona = "analyst"
     cfx = compact_facts(snapshot, scenario_diff, ships)
+    # 1) Купленный ключ DungeonAPI — основной путь
+    llm = _call_dungeon_llm(question, cfx, persona, history)
+    if llm and len(llm) < 15:
+        llm = None  # слишком короткий ответ — пробуем дальше
+    if llm:
+        return llm, facts, "ai"
+    # 2) бесплатный резерв (Pollinations)
     llm = _call_key_llm(question, cfx, persona, history)
     if llm and len(llm) < 15:
         llm = None  # слишком короткий ответ — пробуем дальше

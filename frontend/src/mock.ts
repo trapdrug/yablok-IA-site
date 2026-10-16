@@ -1,6 +1,8 @@
 // Локальный мок-двойник: повторяет логику backend/engine.py 1-в-1.
 // Используется только когда API недоступен (баннер ДЕМО-МОК).
 
+import { askLlm } from './llm';
+
 export interface Product { sku: string; name: string; type?: string; description?: string; aliases?: string[] }
 export interface StockRow { sku: string; on_hand: number }
 export interface Order {
@@ -548,7 +550,40 @@ export function mockProdStart(finishedSku: string, batchQty: number) {
 }
 
 // ---- ИИ-мок ----
-export function mockAiAsk(question: string, scenario?: { shipment_id: string; new_expected_at: string }, _persona: 'analyst' | 'consultant' = 'analyst', _history: { role: string; content: string }[] = []) {
+/** Короткие факты для модели: минимум токенов, все ID и цифры на месте. */
+function compactFacts(snap: any, facts: any) {
+  const human = (sku: string) =>
+    sku === 'FG-AIR' ? 'air' : sku === 'FG-PLUS' ? 'air plus' : sku;
+  const stock = (snap.stock || []).map(
+    (s: any) => `${s.sku}(${human(s.sku)}): всего ${s.on_hand}, свободно ${s.free}, бронь ${s.reserved}`,
+  );
+  const orders = (snap.orders_active || []).slice(0, 12).map(
+    (o: any) =>
+      `${o.order_id}: ${human(o.sku)}x${o.quantity}, готов ${o.readiness || 'неизвестно'}, ` +
+      (o.atRisk ? 'возможный риск' : 'в срок') +
+      (o.shortage ? `, не хватает ${o.shortage}` : ''),
+  );
+  const ships = (facts.shipments || []).slice(0, 6).map(
+    (s: any) => `${s.shipment_id}: ${human(s.sku)}x${s.quantity}, ${s.expected_at}, ${s.status}`,
+  );
+  let delay: any = null;
+  const sd = facts.scenario_diff;
+  if (sd && Array.isArray(sd.threatened) && sd.threatened.length) {
+    const after: Record<string, any> = {};
+    (sd.after || []).forEach((a: any) => { after[a.order_id] = a; });
+    const before: Record<string, any> = {};
+    (sd.before || []).forEach((b: any) => { before[b.order_id] = b; });
+    delay = {
+      'возможный риск': sd.threatened,
+      'перенос готовности': sd.threatened.map(
+        (id: string) => `${id}: ${(before[id] || {}).readiness || '?'} -> ${(after[id] || {}).readiness || '?'}`,
+      ),
+    };
+  }
+  return { время: snap.now, склад: stock, заказы: orders, поставки: ships, задержка: delay };
+}
+
+export async function mockAiAsk(question: string, scenario?: { shipment_id: string; new_expected_at: string }, persona: 'analyst' | 'consultant' = 'analyst', history: { role: string; content: string }[] = []) {
   const snap: any = buildSnapshot();
   const facts = {
     snapshot_summary: `now=${snap.now}; ` + snap.stock.map((s: any) => `${s.sku}: on_hand=${s.on_hand}, reserved=${s.reserved}, free=${s.free}`).join('; '),
@@ -556,8 +591,10 @@ export function mockAiAsk(question: string, scenario?: { shipment_id: string; ne
     shipments: shipments,
     scenario_diff: scenario ? mockDelaySafe(scenario.shipment_id, scenario.new_expected_at) : null,
   };
-  const answer = ruleBased(question, snap, facts);
-  return { answer, facts_used: facts, via: 'rules' };
+  // Backend недоступен (демо-режим) — спрашиваем нейросеть напрямую из браузера.
+  const llm = await askLlm(question, compactFacts(snap, facts), persona, history);
+  if (llm && llm.length >= 15) return { answer: llm, facts_used: facts, via: 'ai' };
+  return { answer: ruleBased(question, snap, facts), facts_used: facts, via: 'rules' };
 }
 
 function mockDelaySafe(id: string, dt: string) {
