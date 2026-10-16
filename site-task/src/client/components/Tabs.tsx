@@ -4,6 +4,7 @@ const TABS = [
   { id: 'shipments', label: 'Поставки' },
   { id: 'simulation', label: 'Симуляция' },
   { id: 'ai', label: 'ИИ' },
+  { id: 'production', label: 'Производство' },
 ];
 
 export function Tabs({ tab, onChange }: { tab: string; onChange: (t: string) => void }) {
