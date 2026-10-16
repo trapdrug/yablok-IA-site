@@ -52,11 +52,9 @@ export default function AiChat({
     setMsgs((prev) => [...prev, { role: 'user', text: qq }]);
     setQ('');
     try {
-      let scenario: any = undefined;
-      if (/задерж/i.test(qq) && /IN-AIR-01/i.test(qq)) {
-        scenario = { shipment_id: 'IN-AIR-01', new_expected_at: '2026-11-05T10:00:00+03:00' };
-      }
-      const r = await aiAsk(qq, scenario, persona, history);
+      // Сценарий задержки чат не придумывает: его собирают из вопроса и данных
+      // (в демо-режиме — mockAiAsk, с живым бэкендом — /api/ai/ask).
+      const r = await aiAsk(qq, undefined, persona, history);
       setMsgs((prev) => [...prev, { role: 'ai', text: r.answer || '' }]);
       setFacts(r.facts_used || null);
       setVia(r.via || '');

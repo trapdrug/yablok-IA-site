@@ -585,6 +585,8 @@ function compactFacts(snap: any, facts: any) {
 
 export async function mockAiAsk(question: string, scenario?: { shipment_id: string; new_expected_at: string }, persona: 'analyst' | 'consultant' = 'analyst', history: { role: string; content: string }[] = []) {
   const snap: any = buildSnapshot();
+  // Сценарий задержки не передан — соберём его из самого вопроса и текущих данных (без заготовок).
+  if (!scenario) scenario = inferDelayFromQuestion(question);
   const facts = {
     snapshot_summary: `now=${snap.now}; ` + snap.stock.map((s: any) => `${s.sku}: on_hand=${s.on_hand}, reserved=${s.reserved}, free=${s.free}`).join('; '),
     readiness_table: snap.orders_active.map((o: any) => ({ order_id: o.order_id, sku: o.sku, need_total: o.quantity, reserved: o.reserved_qty, readiness: o.readiness, atRisk: o.atRisk, shortage: o.shortage, due_at: o.due_at })),
@@ -600,6 +602,26 @@ export async function mockAiAsk(question: string, scenario?: { shipment_id: stri
 function mockDelaySafe(id: string, dt: string) {
   try { return mockDelay(id, dt); }
   catch (e: any) { return { error: e.message, threatened: [], before: [], after: [] }; }
+}
+
+function inferDelayFromQuestion(question: string): { shipment_id: string; new_expected_at: string } | undefined {
+  const q = question.toLowerCase();
+  if (!/(задерж|сдви|перенос|пострад|что будет)/.test(q)) return undefined;
+  const sidTok = (question.toUpperCase().match(/(?:SB-)?IN-[A-Z0-9\-]+/) || [])[0];
+  if (!sidTok) return undefined;
+  const target = shipments.find((s) => s.shipment_id.toUpperCase() === sidTok && s.status === 'expected');
+  if (!target) return undefined;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const iso = question.match(/20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  if (iso) return { shipment_id: target.shipment_id, new_expected_at: iso[0] + ':00+03:00' };
+  const dm = question.match(/(?:^|\D)(\d{1,2})[./](\d{1,2})(?!\d)/);
+  if (dm) {
+    const year = nowDt().getFullYear();
+    return { shipment_id: target.shipment_id, new_expected_at: `${year}-${pad(Number(dm[2]))}-${pad(Number(dm[1]))}T10:00:00+03:00` };
+  }
+  // дата не названа — сдвигаем от текущего момента демо, без зашитых чисел
+  const d = new Date(nowDt().getTime() + 3 * 24 * 60 * 60 * 1000);
+  return { shipment_id: target.shipment_id, new_expected_at: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T10:00:00+03:00` };
 }
 
 function ruleBased(question: string, snapshot: any, facts: any): string {
@@ -624,12 +646,26 @@ function ruleBased(question: string, snapshot: any, facts: any): string {
       return 'При задержке никто не пострадает. База не тронута.';
     }
   }
-  // задержка без scenario в вопросе
-  if (q.includes('задерж') && q.includes('in-air-01')) {
-    try {
-      const d: any = mockDelay('IN-AIR-01', '2026-11-05T10:00:00+03:00');
-      if (d.threatened.length) return `При задержке IN-AIR-01 до 05.11 пострадают: ${d.threatened.join(', ')}. Готовность сдвигается на 05.11 10:00, риск опоздания; остальные без изменений; база не тронута.`;
-    } catch { /* pass */ }
+  // задержка без готового scenario: достаём поставку и дату прямо из вопроса и считаем на лету
+  if (q.includes('задерж') || q.includes('сдви') || q.includes('перенос') || q.includes('пострад')) {
+    const sidTok = (question.toUpperCase().match(/(?:SB-)?IN-[A-Z0-9\-]+/) || [])[0];
+    const sid = sidTok ? [...known].find((k) => k.toUpperCase() === sidTok) : undefined;
+    if (sid) {
+      const year = nowDt().getFullYear();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const iso = question.match(/20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}/);
+      const dm = question.match(/(?:^|\D)(\d{1,2})[./](\d{1,2})(?!\d)/);
+      const dt = iso ? iso[0] + ':00+03:00'
+        : dm ? `${year}-${pad(Number(dm[2]))}-${pad(Number(dm[1]))}T10:00:00+03:00`
+          : `${year}-12-31T10:00:00+03:00`;
+      try {
+        const d: any = mockDelay(sid, dt);
+        if (d.threatened.length) return `При задержке ${sid} до ${dt} пострадают: ${d.threatened.join(', ')}. Остальные без изменений, база не тронута.`;
+        return `При задержке ${sid} до ${dt} никто не пострадает. База не тронута.`;
+      } catch (e: any) {
+        return `Сценарий задержки ${sid} не посчитан: ${e.message}`;
+      }
+    }
   }
   const mOrd = question.toUpperCase().match(/(ORD-\d+|SB-ORD-\d+)/);
   if (mOrd) {
@@ -641,8 +677,25 @@ function ruleBased(question: string, snapshot: any, facts: any): string {
   }
   if (['свободно', 'складе', 'можно отдать', 'можно ли', 'отдать', 'plus', 'air', 'плюс', 'аир', 'датчик', 'базов'].some((w) => q.includes(w))) {
     const plus = stockMap['FG-PLUS'], air = stockMap['FG-AIR'];
-    if (q.includes('5') && (q.includes('plus') || q.includes('плюс'))) {
-      if (plus && plus.free === 3) return 'Нет: на складе 8 air plus, но свободно только 3, 5 удержаны для ORD-002. Отдать 5 новому клиенту нельзя без снятия резерва.';
+    // сколько просят отдать и по какому SKU — считаем из данных, без заготовок
+    const askedM = question.toLowerCase().match(/(?:отдать|отгруз\w*|выдел\w*|дать|продать|хватит)\D{0,12}?(\d+)/);
+    const askedNums = question.match(/\d+/g) || [];
+    const asked = askedM ? Number(askedM[1]) : (askedNums.length ? Number(askedNums[askedNums.length - 1]) : null);
+    const skuQ = (q.includes('plus') || q.includes('плюс')) ? 'FG-PLUS'
+      : ((q.includes('air') || q.includes('аир') || q.includes('базов')) ? 'FG-AIR' : null);
+    if (asked !== null && skuQ) {
+      const stQ: any = stockMap[skuQ] || {};
+      const freeQ = stQ.free ?? 0;
+      const label = skuQ === 'FG-PLUS' ? 'air plus' : 'air';
+      const holders = snapshot.orders_active
+        .filter((o: any) => o.sku === skuQ && (o.reserved_qty || 0) > 0)
+        .map((o: any) => `${o.order_id} (${o.reserved_qty})`).join(', ');
+      if (asked > freeQ) {
+        return `Нет: ${label} всего ${stQ.on_hand ?? '?'}, свободно только ${freeQ}, а просят ${asked}.` +
+          (holders ? ` Удержано: ${holders}.` : '') +
+          ` Отдать ${asked} без снятия резерва или новой поставки нельзя.`;
+      }
+      return `Да: ${label} свободно ${freeQ} из ${stQ.on_hand ?? '?'}, можно выделить ${asked}.`;
     }
     const parts: string[] = [];
     if (plus) parts.push(`air plus: всего ${plus.on_hand}, свободно ${plus.free}, удержано ${plus.reserved}`);
