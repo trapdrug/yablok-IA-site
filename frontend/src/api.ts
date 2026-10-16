@@ -1,7 +1,54 @@
-// fetch-обёртка к VITE_API_URL + автоматический fallback на mock.ts
+// fetch-обёртка к бэкенду + автоматический fallback на mock.ts
 import * as mock from './mock';
 
-const BASE = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000';
+// Адрес бэкенда подбираем автоматически: перебираем кандидатов и берём того,
+// кто ответил на /api/health. Так одни и те же исходники работают и локально,
+// и по LAN-адресу (когда сайт отдаёт сам бэкенд, http://192.168.x.x:8000),
+// и на статике без сервера (тогда всё уходит в демо + прямой вызов модели).
+const ENV_API = ((import.meta.env.VITE_API_URL as string) || '').replace(/\/+$/, '');
+
+function candidateBases(): string[] {
+  const out: string[] = [];
+  const add = (u: string) => {
+    const v = (u || '').replace(/\/+$/, '');
+    if (v && !out.includes(v)) out.push(v);
+  };
+  add(ENV_API);
+  // страницу отдал сам бэкенд? тогда её origin и есть нужный адрес
+  if (location.origin && location.origin !== 'null') add(location.origin);
+  add('http://localhost:8000');
+  add('http://127.0.0.1:8000');
+  const h = location.hostname;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(h) || h.endsWith('.local')) add(`http://${h}:8000`);
+  return out;
+}
+
+let BASE = candidateBases()[0] || 'http://localhost:8000';
+let baseProbe: Promise<string> | null = null;
+let baseProbedAt = 0;
+
+function pingApi(base: string, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => { ctrl.abort(); resolve(false); }, timeoutMs);
+    fetch(`${base}/api/health`, { signal: ctrl.signal })
+      .then((r) => { clearTimeout(t); resolve(r.ok); })
+      .catch(() => { clearTimeout(t); resolve(false); });
+  });
+}
+
+async function resolveBase(): Promise<string> {
+  const cands = candidateBases();
+  if (baseProbe && Date.now() - baseProbedAt < 15000) return baseProbe;
+  baseProbedAt = Date.now();
+  baseProbe = (async () => {
+    for (const c of cands) {
+      if (await pingApi(c)) { BASE = c; return c; }
+    }
+    return cands[0] || BASE; // никто не ответил — уйдём в демо-режим
+  })();
+  return baseProbe;
+}
 
 let mockMode = false;
 const listeners = new Set<(v: boolean) => void>();
@@ -15,10 +62,12 @@ function setMock(v: boolean) {
 }
 
 async function req(path: string, init?: RequestInit, timeoutMs = 4000): Promise<any> {
+  const base = await resolveBase();
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  let netFail = false;
   try {
-    const r = await fetch(`${BASE}${path}`, {
+    const r = await fetch(`${base}${path}`, {
       ...init,
       signal: ctrl.signal,
       headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
@@ -35,8 +84,13 @@ async function req(path: string, init?: RequestInit, timeoutMs = 4000): Promise<
     }
     setMock(false);
     return data;
+  } catch (e: any) {
+    netFail = isNetwork(e);
+    throw e;
   } finally {
     clearTimeout(t);
+    // адрес мог перестать отвечать (сервер выключили/включили) — подберём заново
+    if (netFail) baseProbe = null;
   }
 }
 

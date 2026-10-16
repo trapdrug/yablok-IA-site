@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -366,3 +367,12 @@ def admin_now(body: AdminNow):
         return err(400, "Некорректный now", "Формат ISO8601 с +03:00")
     store.set_meta("scenario_now", body.now)
     return {"ok": True, "now": body.now}
+
+
+# --- Раздача собранного фронтенда (если он собран) ---------------------------
+# Тогда одно устройство в сети может открыть всё сразу по одному адресу:
+#   http://<IP ноутбука>:8000
+# Монтируется последним, чтобы /api/* и /docs имели приоритет.
+_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _DIST.is_dir():
+    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="ui")
