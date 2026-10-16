@@ -6,7 +6,6 @@ import { OrdersTab } from './components/OrdersTab';
 import { ShipmentsTab } from './components/ShipmentsTab';
 import { SimulationTab } from './components/SimulationTab';
 import { AiTab } from './components/AiTab';
-import { ProductionTab } from './components/ProductionTab';
 
 export default function App() {
   const [data, setData] = useState<StateResponse | null>(null);
@@ -42,7 +41,6 @@ export default function App() {
       {tab === 'shipments' && <ShipmentsTab data={data} onAction={refresh} />}
       {tab === 'simulation' && <SimulationTab data={data} />}
       {tab === 'ai' && <AiTab />}
-      {tab === 'production' && <ProductionTab data={data} />}
     </div>
   );
 }

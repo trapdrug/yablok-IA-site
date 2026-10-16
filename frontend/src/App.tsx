@@ -4,13 +4,12 @@ import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
 import Shipments from './pages/Shipments';
 import Scenario from './pages/Scenario';
-import Production from './pages/Production';
 import AiChat from './components/AiChat';
 import Landing from './pages/Landing';
 import Gid from './pages/Gid';
 import { fmtDate } from './format';
 
-type Tab = 'dash' | 'orders' | 'ships' | 'scenario' | 'prod' | 'ai' | 'consult';
+type Tab = 'dash' | 'orders' | 'ships' | 'scenario' | 'ai' | 'consult';
 type View = 'landing' | 'app' | 'gid';
 
 const NAV: { id: Tab; label: string; hint: string }[] = [
@@ -18,7 +17,6 @@ const NAV: { id: Tab; label: string; hint: string }[] = [
   { id: 'orders', label: 'Заказы', hint: 'резерв и отгрузка' },
   { id: 'ships', label: 'Поставки', hint: 'приём входящих' },
   { id: 'scenario', label: 'Задержка', hint: 'пробный расчёт' },
-  { id: 'prod', label: 'Производство', hint: 'партии и состав' },
   { id: 'ai', label: 'ИИ-аналитик', hint: 'вопросы по данным' },
   { id: 'consult', label: 'Консультант', hint: 'простые ответы' },
 ];
@@ -29,7 +27,6 @@ const TABBAR: { id: Tab; label: string }[] = [
   { id: 'orders', label: 'Заказы' },
   { id: 'ships', label: 'Поставки' },
   { id: 'scenario', label: 'Задержка' },
-  { id: 'prod', label: 'Цех' },
   { id: 'ai', label: 'ИИ' },
   { id: 'consult', label: 'Советы' },
 ];
@@ -39,7 +36,6 @@ const SECTION: Record<Tab, { h: string; lead: string }> = {
   orders: { h: 'Заказы', lead: 'Бронь — из свободного запаса, отгрузка — только из брони. Дата готовности считается по остаткам и поставкам.' },
   ships: { h: 'Поставки', lead: 'Поставки в пути. Приёмка добавляет товар на склад один раз, повтор отклоняется.' },
   scenario: { h: 'Проверка задержки', lead: 'Расчёт риска при переносе поставки на другую дату — результат в формате было / стало.' },
-  prod: { h: 'Производство', lead: 'Хватит ли деталей на партию и когда она будет готова. Считается на копии, детали списываются только запуском.' },
   ai: { h: 'ИИ-аналитик', lead: 'Отвечает только по данным программы. Номера и цифры — из базы, без выдумок.' },
   consult: { h: 'ИИ-консультант', lead: 'Простые ответы своими словами: что в наличии, что делать. Цифры — из базы.' },
 };
@@ -93,7 +89,6 @@ export default function App() {
     orders: activeCount || null,
     ships: snap?.kpi?.expected_shipments ?? null,
     scenario: atRisk > 0 ? atRisk : null,
-    prod: null,
     ai: null,
     consult: null,
   }), [activeCount, snap, atRisk]);
@@ -198,7 +193,6 @@ export default function App() {
             {tab === 'orders' && <Orders snapshot={snap} onChange={load} />}
             {tab === 'ships' && <Shipments snapshot={snap} shipmentsAll={ships} onChange={load} />}
             {tab === 'scenario' && <Scenario snapshot={snap} />}
-            {tab === 'prod' && <Production />}
             {/* Оба чата всегда смонтированы: история не теряется при переключении */}
             <div style={{ display: tab === 'ai' ? undefined : 'none' }}>
               <AiChat persona="analyst" />
