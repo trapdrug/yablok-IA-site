@@ -256,13 +256,26 @@ def rule_based(question: str, snapshot: dict, facts: dict, scenario_diff: dict |
         air = stock.get("FG-AIR")
         parts = []
         if plus:
-            parts.append(f"air plus: всего {plus['on_hand']}, свободно {plus['free']}, удержано {plus['reserved']} (в т.ч. 5 для ORD-002)" if plus['reserved'] == 5 else f"air plus: всего {plus['on_hand']}, свободно {plus['free']}, удержано {plus['reserved']}")
+            parts.append(f"air plus: всего {plus['on_hand']}, свободно {plus['free']}, удержано {plus['reserved']}")
         if air:
             parts.append(f"air: всего {air['on_hand']}, свободно {air['free']}, удержано {air['reserved']}")
-        # спецкейс контрольного вопроса 1
-        if "5" in q and ("plus" in q or "плюс" in q or "8 plus" in q or "8" in q):
-            if plus and plus["free"] == 3:
-                return f"Нет: на складе 8 air plus, но свободно только 3, 5 удержаны для ORD-002. Отдать 5 новому клиенту нельзя без снятия резерва."
+        # сколько просят отдать и по какому SKU — считаем из данных вопроса и снапшота, без заготовок
+        asked = _asked_qty(question)
+        sku_q = None
+        if any(w in q for w in ["plus", "плюс"]):
+            sku_q = "FG-PLUS"
+        elif any(w in q for w in ["air", "аир", "базов"]):
+            sku_q = "FG-AIR"
+        if asked is not None and sku_q:
+            st_q = stock.get(sku_q, {})
+            free_q = int(st_q.get("free", 0) or 0)
+            label = "air plus" if sku_q == "FG-PLUS" else "air"
+            if asked > free_q:
+                holders = _reservation_holders(orders, sku_q)
+                extra = f" Удержано: {holders}." if holders else ""
+                return (f"Нет: {label} всего {st_q.get('on_hand', '?')}, свободно только {free_q}, "
+                        f"а просят {asked}.{extra} Отдать {asked} без снятия резерва или новой поставки нельзя.")
+            return f"Да: {label} свободно {free_q} из {st_q.get('on_hand', '?')}, можно выделить {asked}."
         return "Склад: " + "; ".join(parts) + "."
     # общий итог
     kpi = snapshot.get("kpi", {})
@@ -274,9 +287,28 @@ def rule_based_stock_line(snapshot):
     return "; ".join(f"{s['sku']}: свободно {s['free']} из {s['on_hand']}" for s in snapshot.get("stock", [])) + "."
 
 
+def _asked_qty(question: str):
+    """Сколько единиц просят отдать — из формулировки вопроса (без заготовок)."""
+    import re
+    m = re.search(r"(?:отдать|отгруз\w*|выдел\w*|дать|продать|хватит)\D{0,12}?(\d+)", question.lower())
+    if m:
+        return int(m.group(1))
+    nums = re.findall(r"\d+", question)
+    return int(nums[-1]) if nums else None
+
+
+def _reservation_holders(orders: dict, sku: str) -> str:
+    """Активные заказы, держащие резерв по SKU — вычисляется из данных, без заготовок."""
+    holders = []
+    for o in orders.values():
+        if o.get("sku") == sku and int(o.get("reserved_qty", 0) or 0) > 0:
+            holders.append(f"{o['order_id']} ({o['reserved_qty']})")
+    return ", ".join(holders)
+
+
 def answer(question: str, snapshot: dict, scenario_diff: dict | None = None, all_shipments: list | None = None, persona: str = "analyst", history: list | None = None) -> tuple[str, dict, str]:
-    # Авто-сценарий: если спрашивают про задержку конкретной поставки без scenario — посчитаем на лету,
-    # чтобы контрольный вопрос «Какие заказы пострадают при задержке IN-AIR-01 до 05.11?» отвечал верно и офлайн.
+    # Авто-сценарий: если спрашивают про задержку конкретной поставки без scenario — считаем его
+    # из вопроса и данных, чтобы ответ строился на месте, а не брался из заготовок.
     if scenario_diff is None:
         try:
             inferred = _infer_delay(question, snapshot, all_shipments or snapshot.get("shipments_expected", []))
